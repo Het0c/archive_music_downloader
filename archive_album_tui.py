@@ -9,7 +9,7 @@ from pathlib import Path
 from archive_album_search import (
     AlbumSearch,
     ArchiveResult,
-    collect_magnet,
+    download_torrent,
     first_value,
     load_internetarchive,
     musicbrainz_album_info,
@@ -160,7 +160,7 @@ def choose_result(rows: list[ArchiveResult]) -> ArchiveResult | None:
         print(f"Elige un numero entre 1 y {len(rows)}.")
 
 
-def result_menu(client: object, result: ArchiveResult) -> None:
+def result_menu(result: ArchiveResult) -> None:
     identifier = result.identifier
     title = result.title
     url = f"https://archive.org/details/{identifier}"
@@ -173,31 +173,21 @@ def result_menu(client: object, result: ArchiveResult) -> None:
             for track in result.track_matches:
                 print(f"  - {track}")
         print(f"URL: {url}")
-        print("  1. Mostrar magnet torrent")
-        print("  2. Guardar magnet torrent")
-        print("  3. Abrir en navegador")
-        print("  4. Volver a resultados")
+        print("  1. Descargar archivo .torrent")
+        print("  2. Abrir en navegador")
+        print("  3. Volver a resultados")
         action = ask("Accion", "1")
 
         if action == "1":
             try:
-                magnet = collect_magnet(identifier, title)
+                path = download_torrent(identifier, Path("torrents"))
             except Exception as exc:
-                print(f"No se pudo obtener el magnet: {exc}")
+                print(f"No se pudo descargar el torrent: {exc}")
             else:
-                print("\nMagnet:")
-                print(magnet)
+                print(f"\nTorrent descargado en {path}")
         elif action == "2":
-            try:
-                magnet = collect_magnet(identifier, title, Path("magnets"))
-            except Exception as exc:
-                print(f"No se pudo guardar el magnet: {exc}")
-            else:
-                print("\nMagnet:")
-                print(magnet)
-        elif action == "3":
             webbrowser.open(url)
-        elif action == "4":
+        elif action == "3":
             return
         else:
             print("Accion no valida.")
@@ -242,7 +232,7 @@ def run() -> int:
                 return 0
             if selected is None:
                 break
-            result_menu(client, selected)
+            result_menu(selected)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Callable
 
 from PyQt6.QtCore import QObject, QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -38,7 +37,7 @@ from archive_album_search import (
     AlbumSearch,
     ArchiveResult,
     NetworkLookupError,
-    collect_magnet,
+    download_torrent,
     load_internetarchive,
     musicbrainz_album_info,
     search_album_metadata,
@@ -82,7 +81,7 @@ class ArchiveAlbumWindow(QMainWindow):
         self.current_search = AlbumSearch()
         self.rows: list[ArchiveResult] = []
 
-        self.setWindowTitle("Archive Music Magnet Finder")
+        self.setWindowTitle("Archive Music Downloader")
         self.resize(1180, 760)
 
         central = QWidget()
@@ -90,7 +89,7 @@ class ArchiveAlbumWindow(QMainWindow):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
 
-        title = QLabel("Archive Music Magnet Finder")
+        title = QLabel("Archive Music Downloader")
         title.setObjectName("Title")
         root.addWidget(title)
 
@@ -207,17 +206,11 @@ class ArchiveAlbumWindow(QMainWindow):
         self.detail.setReadOnly(True)
         self.detail.setMaximumHeight(110)
         actions = QHBoxLayout()
-        self.show_magnet_button = QPushButton("Mostrar magnet")
-        self.save_magnet_button = QPushButton("Guardar magnet")
+        self.download_torrent_button = QPushButton("Descargar .torrent")
         self.open_button = QPushButton("Abrir archive.org")
-        self.copy_button = QPushButton("Copiar magnet")
-        self.show_magnet_button.clicked.connect(self.show_magnet)
-        self.save_magnet_button.clicked.connect(self.save_magnet)
+        self.download_torrent_button.clicked.connect(self.download_selected_torrent)
         self.open_button.clicked.connect(self.open_selected)
-        self.copy_button.clicked.connect(self.copy_magnet)
-        actions.addWidget(self.show_magnet_button)
-        actions.addWidget(self.save_magnet_button)
-        actions.addWidget(self.copy_button)
+        actions.addWidget(self.download_torrent_button)
         actions.addWidget(self.open_button)
         layout.addWidget(self.detail)
         layout.addLayout(actions)
@@ -355,9 +348,7 @@ class ArchiveAlbumWindow(QMainWindow):
             self.enrich_button,
             self.search_button,
             self.clear_button,
-            self.show_magnet_button,
-            self.save_magnet_button,
-            self.copy_button,
+            self.download_torrent_button,
             self.open_button,
         ]:
             button.setDisabled(busy)
@@ -496,42 +487,20 @@ class ArchiveAlbumWindow(QMainWindow):
             QMessageBox.information(self, "Aviso", "Selecciona un resultado de la tabla.")
         return result
 
-    def show_magnet(self) -> None:
+    def download_selected_torrent(self) -> None:
         result = self.selected_or_warn()
         if result is None:
             return
 
-        def task() -> str:
-            return collect_magnet(result.identifier, result.title)
+        def task() -> Path:
+            return download_torrent(result.identifier, Path("torrents"))
 
         def done(value: object) -> None:
-            magnet = str(value)
-            self.detail.setPlainText(magnet)
-            self.set_status("Magnet generado.")
+            path = str(value)
+            self.detail.setPlainText(f"Torrent descargado en:\n{path}")
+            self.set_status(f"Torrent descargado en {path}")
 
-        self.run_worker("Generando magnet...", task, done)
-
-    def save_magnet(self) -> None:
-        result = self.selected_or_warn()
-        if result is None:
-            return
-
-        def task() -> str:
-            return collect_magnet(result.identifier, result.title, Path("magnets"))
-
-        def done(value: object) -> None:
-            self.detail.setPlainText(str(value))
-            self.set_status("Magnet guardado en la carpeta magnets.")
-
-        self.run_worker("Guardando magnet...", task, done)
-
-    def copy_magnet(self) -> None:
-        text = self.detail.toPlainText().strip()
-        if not text.startswith("magnet:?"):
-            QMessageBox.information(self, "Aviso", "Primero genera o muestra un magnet.")
-            return
-        QGuiApplication.clipboard().setText(text)
-        self.set_status("Magnet copiado al portapapeles.")
+        self.run_worker("Descargando el archivo .torrent de Archive.org...", task, done)
 
     def open_selected(self) -> None:
         result = self.selected_or_warn()

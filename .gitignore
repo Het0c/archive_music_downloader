@@ -5,3 +5,6 @@ magnets/
 *.magnet.txt
 *_meta.xml
 *_files.xml
+torrents/
+*.torrent
+*.pyc

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Search music albums on archive.org and collect their torrent magnet links."""
+"""Search music albums on archive.org and download their torrent files."""
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-import hashlib
 import json
 import re
 import socket
@@ -20,7 +19,7 @@ from typing import Any, Iterable
 
 
 MUSICBRAINZ_API_BASE = "https://musicbrainz.org/ws/2"
-USER_AGENT = "archive-music-magnet-finder/1.0 (local script; https://musicbrainz.org/doc/MusicBrainz_API)"
+USER_AGENT = "archive-music-downloader/1.0 (local script; https://musicbrainz.org/doc/MusicBrainz_API)"
 
 
 @dataclass
@@ -323,21 +322,38 @@ def print_results(results: Iterable[dict]) -> None:
 
 
 def torrent_url(identifier: str) -> str:
-    quoted_identifier = urllib.parse.quote(identifier)
-    quoted_file = urllib.parse.quote(f"{identifier}_archive.torrent")
+    quoted_identifier = urllib.parse.quote(identifier, safe="")
+    quoted_file = urllib.parse.quote(f"{identifier}_archive.torrent", safe="")
     return f"https://archive.org/download/{quoted_identifier}/{quoted_file}"
 
 
 def fetch_torrent(identifier: str) -> bytes:
     url = torrent_url(identifier)
-    request = urllib.request.Request(url, headers={"User-Agent": "archive-music-magnet/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            return response.read()
+            torrent = response.read()
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, socket.gaierror):
             raise NetworkLookupError(f"No se pudo resolver archive.org para {identifier}.") from exc
         raise
+    if not torrent.startswith(b"d"):
+        raise ValueError(f"Archive.org no devolvio un torrent valido para {identifier}.")
+    return torrent
+
+
+def save_torrent(identifier: str, torrent: bytes, output_dir: Path) -> Path:
+    """Save the original Archive.org torrent without converting its contents."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"{clean_name(identifier)}_archive.torrent"
+    path.write_bytes(torrent)
+    return path
+
+
+def download_torrent(identifier: str, output_dir: Path | None = None) -> Path:
+    """Download an item's Archive.org-generated torrent file."""
+    destination = output_dir if output_dir is not None else Path("torrents")
+    return save_torrent(identifier, fetch_torrent(identifier), destination)
 
 
 def archive_download_url(identifier: str, filename: str) -> str:
@@ -349,7 +365,7 @@ def archive_download_url(identifier: str, filename: str) -> str:
 
 
 def fetch_text(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "archive-music-magnet/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return response.read().decode("utf-8", errors="replace")
@@ -438,81 +454,9 @@ def summarize_archive_results(results: list[dict], search: AlbumSearch) -> list[
     return summaries
 
 
-def find_bencoded_value_end(data: bytes, index: int) -> int:
-    marker = data[index : index + 1]
-    if marker == b"i":
-        end = data.index(b"e", index)
-        return end + 1
-    if marker == b"l":
-        index += 1
-        while data[index : index + 1] != b"e":
-            index = find_bencoded_value_end(data, index)
-        return index + 1
-    if marker == b"d":
-        index += 1
-        while data[index : index + 1] != b"e":
-            index = find_bencoded_value_end(data, index)
-            index = find_bencoded_value_end(data, index)
-        return index + 1
-    if marker.isdigit():
-        colon = data.index(b":", index)
-        length = int(data[index:colon])
-        return colon + 1 + length
-    raise ValueError("Torrent bencode invalido.")
-
-
-def torrent_info_bytes(torrent: bytes) -> bytes:
-    key = b"4:info"
-    start = torrent.find(key)
-    if start == -1:
-        raise ValueError("El torrent no contiene seccion info.")
-    info_start = start + len(key)
-    info_end = find_bencoded_value_end(torrent, info_start)
-    return torrent[info_start:info_end]
-
-
-def torrent_trackers(torrent: bytes) -> list[str]:
-    trackers: list[str] = []
-    for match in re.finditer(rb"(\d+):(udp://[^,\s]+|https?://[^,\s]+)", torrent):
-        length = int(match.group(1))
-        value_start = match.start(2)
-        value = torrent[value_start : value_start + length]
-        try:
-            tracker = value.decode("utf-8")
-        except UnicodeDecodeError:
-            continue
-        if tracker not in trackers:
-            trackers.append(tracker)
-    return trackers
-
-
-def magnet_link(identifier: str, title: str | None = None) -> str:
-    torrent = fetch_torrent(identifier)
-    info_hash = hashlib.sha1(torrent_info_bytes(torrent)).hexdigest()
-    display_name = title or identifier
-    params = [("xt", f"urn:btih:{info_hash}"), ("dn", display_name)]
-    params.extend(("tr", tracker) for tracker in torrent_trackers(torrent))
-    return "magnet:?" + urllib.parse.urlencode(params)
-
-
-def save_magnet(identifier: str, magnet: str, output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{clean_name(identifier)}.magnet.txt"
-    path.write_text(magnet + "\n", encoding="utf-8")
-    return path
-
-
-def collect_magnet(identifier: str, title: str | None = None, output_dir: Path | None = None) -> str:
-    magnet = magnet_link(identifier, title)
-    if output_dir is not None:
-        path = save_magnet(identifier, magnet, output_dir)
-        print(f"Magnet guardado en {path}")
-    return magnet
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Busca albumes musicales en archive.org y recopila su magnet torrent."
+        description="Busca albumes musicales en archive.org y descarga sus archivos torrent."
     )
     parser.add_argument("busqueda", nargs="?", default="", help="Nombre del album, artista o palabras clave.")
     parser.add_argument("--title", default="", help="Titulo de una cancion del album.")
@@ -537,17 +481,20 @@ def parse_args() -> argparse.Namespace:
         help='Colección de archive.org. Usa "" para no filtrar. Default: opensource_audio.',
     )
     parser.add_argument(
+        "-t",
+        "--torrent",
         "-m",
         "--magnet",
+        dest="torrent",
         type=int,
         metavar="NUM",
-        help="Genera el magnet torrent del resultado indicado por numero.",
+        help="Descarga el .torrent del resultado indicado por numero (--magnet se conserva como alias).",
     )
     parser.add_argument(
         "-o",
         "--output",
         default=None,
-        help="Carpeta donde guardar el magnet como .txt. Si se omite, solo lo imprime.",
+        help="Carpeta donde guardar el .torrent. Default: torrents.",
     )
     return parser.parse_args()
 
@@ -577,15 +524,22 @@ def main() -> int:
         return 1
 
     print_results(results)
-    if args.magnet is not None:
-        if args.magnet < 1 or args.magnet > len(results):
+    if args.torrent is not None:
+        if args.torrent < 1 or args.torrent > len(results):
             print(f"El numero de resultado debe estar entre 1 y {len(results)}.", file=sys.stderr)
             return 2
-        result = results[args.magnet - 1]
+        result = results[args.torrent - 1]
         identifier = first_value(result.get("identifier"))
-        title = first_value(result.get("title"), identifier)
         output_dir = Path(args.output) if args.output else None
-        print(collect_magnet(identifier, title, output_dir))
+        try:
+            path = download_torrent(identifier, output_dir)
+        except NetworkLookupError as exc:
+            print(exc, file=sys.stderr)
+            return 3
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            print(f"No se pudo descargar el torrent: {exc}", file=sys.stderr)
+            return 4
+        print(f"Torrent descargado en {path}")
     return 0
 
 
