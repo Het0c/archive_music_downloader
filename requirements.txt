@@ -1,0 +1,2 @@
+internetarchive>=5.5.0
+PyQt6>=6.7.0
